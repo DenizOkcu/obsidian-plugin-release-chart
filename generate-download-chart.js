@@ -161,65 +161,93 @@ versionReleases.sort((a, b) => compareVersions(a.version, b.version));
 
 // Calculate additional metrics for each version
 for (let i = 0; i < versionReleases.length; i++) {
-  const currentVersion = versionReleases[i];
-  const currentIdx = currentVersion.index;
+  const currentVersionRelease = versionReleases[i];
+  const currentVersionStartIndex = currentVersionRelease.index;
 
-  // Special handling for versions that appear on the same date
-  // Find the next version's index, even if it's on the same date
-  let nextIdx = dates.length;
-  let nextVersion = null;
-
+  // Handle cases where a semantically later version supersedes the current one at the exact same data point index
   if (i < versionReleases.length - 1) {
-    // If this is not the last version, use the next version in the sorted list
-    nextVersion = versionReleases[i + 1];
-    nextIdx = nextVersion.index;
+    const semanticallyNextVersionRelease = versionReleases[i + 1];
+    if (semanticallyNextVersionRelease.index === currentVersionStartIndex) {
+      // This version is immediately superseded by a semantically later one at the same data point.
+      // Assign zero effective duration and impact.
+      currentVersionRelease.endDownloads = currentVersionRelease.downloads;
+      currentVersionRelease.downloadChange = 0;
+      currentVersionRelease.durationDays = 0;
+      currentVersionRelease.avgDailyGrowth = 0;
 
-    // Special case: If the next version appears on the same date
-    if (nextIdx === currentIdx) {
-      // For versions on the same date, set a minimal duration (1 day)
-      // and assume they are transient versions with no individual impact
-      versionReleases[i].endDownloads = currentVersion.downloads;
-      versionReleases[i].downloadChange = 0;
-      versionReleases[i].durationDays = 0;
-      versionReleases[i].avgDailyGrowth = 0;
-
-      // Log this special case
+      // Log this specific case
       console.log(
-        `Version ${currentVersion.version} appears on the same date as the next version ${nextVersion.version}, setting zero duration and impact.`,
+        `Version ${currentVersionRelease.version} (at index ${currentVersionStartIndex}) is superseded by ${semanticallyNextVersionRelease.version} (also at index ${semanticallyNextVersionRelease.index}) at the same data point. Setting zero duration and impact.`,
       );
-
-      // Skip to the next version
-      continue;
+      continue; // Move to the next version in versionReleases
     }
   }
 
-  // Regular case: calculate metrics
-  const startDownloads = currentVersion.downloads;
+  // If not superseded at the same data point index, determine the end of its active period.
+  // The period ends when the *next chronologically occurring* version (from versionReleases) starts.
+  let nextChronologicalReleaseStartIndex = dataPoints.length; // Default: current version's period extends to the end of data
+
+  for (const otherRelease of versionReleases) {
+    // Consider only other releases that start *after* the current one's start index
+    if (otherRelease.index > currentVersionStartIndex) {
+      if (otherRelease.index < nextChronologicalReleaseStartIndex) {
+        // This is the earliest chronological next release found so far
+        nextChronologicalReleaseStartIndex = otherRelease.index;
+      }
+    }
+  }
+  // Now, 'nextChronologicalReleaseStartIndex' is the index in 'dataPoints' where the next version's period effectively starts.
+  // The current version's active period spans dataPoints[currentVersionStartIndex] through dataPoints[nextChronologicalReleaseStartIndex - 1].
+
+  // The index of the last data point for the current version's period.
+  // This index must be valid for accessing dataPoints and downloadCounts.
+  // Since dataPoints is non-empty (checked earlier) and currentVersionStartIndex is a valid index (>=0):
+  // - nextChronologicalReleaseStartIndex will be > currentVersionStartIndex OR equal to dataPoints.length.
+  // - Therefore, nextChronologicalReleaseStartIndex >= 1 (assuming dataPoints.length >= 1).
+  // - So, (nextChronologicalReleaseStartIndex - 1) will be >= 0.
+  // - Also, nextChronologicalReleaseStartIndex <= dataPoints.length, so (nextChronologicalReleaseStartIndex - 1) <= dataPoints.length - 1.
+  // This makes 'lastDataPointIndexForCurrentVersion' a safe index.
+  const lastDataPointIndexForCurrentVersion =
+    nextChronologicalReleaseStartIndex - 1;
+
+  const startDownloads = currentVersionRelease.downloads;
+  // Ensure access is within bounds, though logic above should guarantee it for non-empty dataPoints
   const endDownloads =
-    nextIdx < downloadCounts.length
-      ? downloadCounts[nextIdx - 1]
-      : downloadCounts[downloadCounts.length - 1];
+    lastDataPointIndexForCurrentVersion >= 0 &&
+    lastDataPointIndexForCurrentVersion < downloadCounts.length
+      ? downloadCounts[lastDataPointIndexForCurrentVersion]
+      : downloadCounts.length > 0
+      ? downloadCounts[downloadCounts.length - 1]
+      : startDownloads; // Fallback if array empty or index issue
+
   const downloadChange = endDownloads - startDownloads;
 
-  // Calculate duration in days
-  const startDate = dataPoints[currentIdx].date;
+  const startDate = dataPoints[currentVersionStartIndex].date;
   const endDate =
-    nextIdx < dataPoints.length
-      ? dataPoints[nextIdx - 1].date
-      : dataPoints[dataPoints.length - 1].date;
+    lastDataPointIndexForCurrentVersion >= 0 &&
+    lastDataPointIndexForCurrentVersion < dataPoints.length
+      ? dataPoints[lastDataPointIndexForCurrentVersion].date
+      : dataPoints.length > 0
+      ? dataPoints[dataPoints.length - 1].date
+      : startDate; // Fallback
+
+  // Calculate duration in days
+  const durationMs = endDate.getTime() - startDate.getTime();
+  // Math.max(1, ...) ensures duration is at least 1 day, even if start and end are the same or very close.
+  // This also prevents division by zero for avgDailyGrowth if durationMs is 0.
   const durationDays = Math.max(
     1,
-    Math.round((endDate - startDate) / (1000 * 60 * 60 * 24)),
+    Math.round(durationMs / (1000 * 60 * 60 * 24)),
   );
 
   // Calculate average daily growth
-  const avgDailyGrowth = Math.round(downloadChange / durationDays);
+  const avgDailyGrowth = Math.round(downloadChange / durationDays); // durationDays is guaranteed >= 1
 
-  // Add to version data
-  versionReleases[i].endDownloads = endDownloads;
-  versionReleases[i].downloadChange = downloadChange;
-  versionReleases[i].durationDays = durationDays;
-  versionReleases[i].avgDailyGrowth = avgDailyGrowth;
+  // Add calculated metrics to the version release object
+  currentVersionRelease.endDownloads = endDownloads;
+  currentVersionRelease.downloadChange = downloadChange;
+  currentVersionRelease.durationDays = durationDays;
+  currentVersionRelease.avgDailyGrowth = avgDailyGrowth;
 }
 
 // Create a mapping of versions to their indices and rebuild versionIndices
