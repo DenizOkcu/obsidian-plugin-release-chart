@@ -55,6 +55,7 @@ This project provides two scripts to extract historical download data for an Obs
 6.  **View the Chart:**
 
     Open the generated `your-plugin-name-downloads-chart.html` file in your web browser.
+    _Note: Viewing the chart requires an internet connection as it fetches charting libraries from CDNs (Content Delivery Networks)._
 
 ## Understanding the Chart
 
