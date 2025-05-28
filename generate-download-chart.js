@@ -283,7 +283,9 @@ function generateColors(count) {
   return colors;
 }
 
-const versionColors = generateColors(versionReleases.length);
+const versionColors = generateColors(
+  (firstVersionIdx > 0 ? 1 : 0) + versionReleases.length,
+);
 
 // Break the data into segments by version
 const datasets = [];
